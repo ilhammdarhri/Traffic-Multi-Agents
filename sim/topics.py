@@ -4,6 +4,7 @@ Topic tree:
     traffic/{carrefour}/approach/{dir}/queue    measured queue length
     traffic/{carrefour}/signal/plan             green times for the next cycle
     traffic/{carrefour}/signal/etat             phase actually displayed
+    traffic/{carrefour}/signal/preempt          immediate priority-green command (emergency)
     traffic/{carrefour}/offset/{id}             offset proposed at a consensus iteration
     traffic/priority/request                    emergency vehicle / bus priority request
     sma/agent/{id}/statut                       online / offline (offline = Last Will)
@@ -21,6 +22,10 @@ def signal_plan(carrefour):
 
 def signal_etat(carrefour):
     return f"traffic/{carrefour}/signal/etat"
+
+
+def signal_preempt(carrefour):
+    return f"traffic/{carrefour}/signal/preempt"
 
 
 def offset(carrefour, agent_id):
@@ -54,6 +59,7 @@ QOS = {
     "etat": 1,
     "offset": 1,
     "priority": 2,
+    "preempt": 2,       # an emergency command must neither be lost nor duplicated
     "status": 1,
 }
 
@@ -63,6 +69,7 @@ RETAINED = {
     "etat": True,       # last known actuator state
     "offset": False,
     "priority": False,
+    "preempt": False,   # a stale preemption must never be replayed to a late subscriber
     "status": True,     # current online/offline of each agent
 }
 

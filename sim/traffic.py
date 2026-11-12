@@ -6,7 +6,13 @@ Cycle layout for plan (g_avenue, g_side), offset o, cycle C, lost time l per pha
     all red      : g_a <= local < g_a + l
     side green   : g_a + l <= local < g_a + l + g_s
     all red      : the rest (l seconds)
-A new plan only takes effect at the start of the next cycle.
+A new plan only takes effect at the next cycle start.
+
+Preemption (emergency vehicle): preempt(phase, duration, delay) schedules a priority
+green window starting `delay` seconds from now. If another phase is green at that
+moment, the controller first shows all-red for `l` seconds (safety clearance), then
+green for `phase`. After the window it shows all-red for `l` seconds again unless the
+normal cycle is already green for the same phase, then resumes the normal cycle.
 """
 from collections import deque
 
@@ -74,6 +80,8 @@ class IntersectionSim:
         if not validate_plan(self.plan):
             raise ValueError(f"invalid plan {self.plan}")
         self._pending = None
+        self._override = None                   # active preemption window
+        self.preemptions = 0
         self.t = 0
         rng = np.random.default_rng(seed)
         self.phases = {name: PhaseQueue(arrival_rates[name], rng, q0=q0) for name in (AVENUE, SIDE)}
@@ -89,17 +97,56 @@ class IntersectionSim:
     def set_offset(self, offset):
         self.offset = offset
 
+    def preempt(self, phase, duration, delay=0):
+        """Priority green for `phase`: window [t + delay, t + delay + duration).
+        Returns False for an invalid request."""
+        if phase not in (AVENUE, SIDE) or duration <= 0 or delay < 0:
+            return False
+        start = self.t + delay
+        window = {"phase": phase, "start": start, "until": start + duration, "started": False}
+        ov = self._override
+        if ov and ov["phase"] == phase and "clear_until" not in ov:
+            ov["until"] = max(ov["until"], window["until"])      # same phase: extend
+        else:
+            self._override = window                              # otherwise: replace
+        self.preemptions += 1
+        return True
+
     # --- state ------------------------------------------------------------
     def local_time(self):
         return (self.t - self.offset) % self.cycle
 
-    def current_signal(self):
+    def _base_signal(self):
         local, g_a, g_s = self.local_time(), self.plan[AVENUE], self.plan[SIDE]
         if local < g_a:
             return AVENUE
         if g_a + self.lost <= local < g_a + self.lost + g_s:
             return SIDE
         return RED
+
+    def _update_override(self):
+        ov, t = self._override, self.t
+        if ov is None:
+            return
+        if not ov["started"] and t >= ov["start"]:
+            ov["green_from"] = ov["start"] if self._base_signal() == ov["phase"] else ov["start"] + self.lost
+            ov["started"] = True
+        if ov["started"] and "clear_until" not in ov and t >= ov["until"]:
+            ov["clear_until"] = t + (0 if self._base_signal() == ov["phase"] else self.lost)
+        if ov["started"] and "clear_until" in ov and t >= ov["clear_until"]:
+            self._override = None
+
+    def current_signal(self):
+        self._update_override()
+        ov, t = self._override, self.t
+        if ov and ov["started"]:
+            if t < ov["green_from"]:
+                return RED
+            if t < ov["until"]:
+                return ov["phase"]
+            if t < ov["clear_until"]:
+                return RED
+        return self._base_signal()
 
     def queue_lengths(self):
         return {name: len(p) for name, p in self.phases.items()}

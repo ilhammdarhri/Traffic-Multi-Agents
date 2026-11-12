@@ -23,7 +23,8 @@ class Sensor:
 
 
 class Actuator:
-    """Traffic light controller: applies green plans received on signal/plan and
+    """Traffic light controller. Applies green plans received on signal/plan (next
+    cycle) and preemption commands received on signal/preempt (immediately), and
     reports the phase really displayed on signal/etat (retained)."""
 
     def __init__(self, carrefour, intersection, mqtt):
@@ -31,13 +32,27 @@ class Actuator:
         self.intersection = intersection
         self.mqtt = mqtt
         self.source = f"actuator-{carrefour}"
-        self.rejected = 0                   # invalid plans received
+        self.rejected = 0                   # invalid plans / commands received
+        self.preemptions = 0                # preemption commands applied
         self._last_state = None
         mqtt.subscribe(topics.signal_plan(carrefour), self._on_plan, kind="plan")
+        mqtt.subscribe(topics.signal_preempt(carrefour), self._on_preempt, kind="preempt")
 
     def _on_plan(self, topic, message):
         if not self.intersection.set_plan(message.valeur):
             self.rejected += 1              # safety: never apply an invalid plan
+
+    def _on_preempt(self, topic, message):
+        v = message.valeur
+        try:
+            ok = isinstance(v, dict) and self.intersection.preempt(
+                v.get("phase"), v.get("duration_s", 0), v.get("delay_s", 0))
+        except TypeError:
+            ok = False
+        if ok:
+            self.preemptions += 1
+        else:
+            self.rejected += 1
 
     def tick(self):
         """Call once per simulated second; publishes only when the display changes."""

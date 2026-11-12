@@ -1,11 +1,18 @@
 """IntersectionAgent: chooses the green split of one intersection.
 
-Observes the queues published by the ApproachAgents, forecasts with the utility
-model, and picks the split (g_avenue, g_side) maximising the summed utility
-under the coupling constraint  g_avenue + g_side = GREEN_BUDGET,  g_k >= G_MIN.
-The chosen plan is published on traffic/{carrefour}/signal/plan (QoS 1, retained).
+Every cycle it observes the queues published by the ApproachAgents, forecasts with
+the utility model, and picks the split (g_avenue, g_side) maximising the summed
+utility under the coupling constraint  g_avenue + g_side = GREEN_BUDGET,  g_k >= G_MIN.
+The plan is published on traffic/{carrefour}/signal/plan (QoS 1, retained).
 
-Arrival rates are forecasts (lambda_k); the queues Q0_k are measured.
+Knowledge base (optional) supplies:
+  - the phase weights w_k                       kb.weight(...)
+  - event forecasts (lambda_k x event factor)   kb.arrival_factor(...)
+  - priority rules for requests on traffic/priority/request:
+        "preempt"      (emergency vehicle) -> immediate command on signal/preempt
+        "boost_weight" (bus)               -> heavier weight in the next decision only
+Without a knowledge base, priority requests are ignored.
+
 Ties (the utility is flat when both queues stay positive) are broken in favour of
 the split closest to proportional to the green each phase needs.
 """
@@ -16,6 +23,8 @@ from sim.message import Message
 from sim.traffic import AVENUE, SIDE
 
 PHASES = (AVENUE, SIDE)
+EMERGENCY_MARGIN_S = 2          # green is shown this long before the vehicle arrives
+EMERGENCY_HOLD_S = 6            # and kept this long after its expected arrival
 
 
 class IntersectionAgent(UtilityAgent):
@@ -25,8 +34,12 @@ class IntersectionAgent(UtilityAgent):
         self.arrival_rates = dict(arrival_rates or config.ARRIVALS["normal"])
         self.weights = dict(weights or {})          # explicit overrides {phase: w}
         self.queues = {}                            # latest measure per direction
+        self.now = 0                                # simulation time, for event forecasts
+        self._boosts = {}                           # phase -> weight announced by a bus
+        self.preemptions = []                       # log of preemption commands sent
         self.state = {"queues": {}, "functions": {}}
         mqtt.subscribe(topics.queue(carrefour, "+"), self._on_queue, kind="queue")
+        mqtt.subscribe(topics.PRIORITY_REQUEST, self._on_priority, kind="priority")
 
     # --- perception -------------------------------------------------------
     def _on_queue(self, topic, message):
@@ -34,12 +47,46 @@ class IntersectionAgent(UtilityAgent):
         if direction in PHASES:
             self.queues[direction] = message.valeur
 
+    def _on_priority(self, topic, message):
+        v = message.valeur
+        if self.kb is None or not isinstance(v, dict) or v.get("carrefour") != self.carrefour:
+            return
+        phase, rule = v.get("phase"), self.kb.priority_rule(v.get("kind"))
+        if phase not in PHASES or rule is None:
+            return
+        if rule["action"] == "preempt":
+            self._preempt(phase, v.get("eta_s", 0))
+        elif rule["action"] == "boost_weight":
+            self._boosts[phase] = max(self._boosts.get(phase, 1.0), rule["weight_factor"])
+
+    def _preempt(self, phase, eta_s):
+        """Rule: emergency vehicle approaching => priority green on its phase, timed so
+        that green appears just before it arrives (disturbs the others as little as possible)."""
+        lead = config.LOST_PER_PHASE + EMERGENCY_MARGIN_S
+        command = {"phase": phase,
+                   "delay_s": max(0, int(round(eta_s)) - lead),
+                   "duration_s": lead + EMERGENCY_HOLD_S}
+        self.preemptions.append(dict(command, at=self.now))
+        msg = Message(source=self.agent_id, valeur=command, unite="s")
+        self.mqtt.publish(topics.signal_preempt(self.carrefour), msg, "preempt")
+
+    # --- model ------------------------------------------------------------
     def weight(self, phase):
         if phase in self.weights:
-            return self.weights[phase]
+            base = self.weights[phase]
+        elif self.kb is not None:
+            base = self.kb.weight(self.carrefour, phase)
+        else:
+            base = config.WEIGHTS["default"]
+        boost = self._boosts.get(phase)
+        return max(base, boost) if boost else base
+
+    def forecast(self, phase):
+        """lambda_k: nominal rate times the factor of the events active now."""
+        rate = self.arrival_rates[phase]
         if self.kb is not None:
-            return self.kb.weight(self.carrefour, phase)
-        return config.WEIGHTS["default"]
+            rate *= self.kb.arrival_factor(self.carrefour, phase, self.now)
+        return rate
 
     def set_forecast(self, arrival_rates):
         self.arrival_rates = dict(arrival_rates)
@@ -50,7 +97,7 @@ class IntersectionAgent(UtilityAgent):
         self.state = {
             "queues": queues,
             "functions": {p: UtilityFunction(weight=self.weight(p),
-                                             arrival_rate=self.arrival_rates[p],
+                                             arrival_rate=self.forecast(p),
                                              q0=queues[p]) for p in PHASES},
         }
 
@@ -75,6 +122,10 @@ class IntersectionAgent(UtilityAgent):
         msg = Message(source=self.agent_id, valeur=plan, unite="s")
         self.mqtt.publish(topics.signal_plan(self.carrefour), msg, "plan")
 
-    def decide_cycle(self):
+    def decide_cycle(self, t=None):
         """One decision cycle from the latest received queue measures."""
-        return self.step(dict(self.queues))
+        if t is not None:
+            self.now = t
+        action = self.step(dict(self.queues))
+        self._boosts.clear()                        # a bus announcement lasts one decision
+        return action

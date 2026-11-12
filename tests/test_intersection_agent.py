@@ -66,6 +66,9 @@ def test_weights_from_knowledge_base():
     class KB:
         def weight(self, carrefour, phase):
             return 3.0 if phase == SIDE else 1.0
+
+        def arrival_factor(self, carrefour, phase, t):
+            return 1.0
     ia, _ = agent_with({AVENUE: 5, SIDE: 5}, rates=PEAK, kb=KB())
     assert ia.decide() == (43, 37)
 
