@@ -17,7 +17,10 @@ Module: Systemes Multi-Agents appliques a l'IoT (Master MSID S3).
 ## Quick start (to be completed)
 
 1. Start the MQTT broker:
-   `docker run -p 1883:1883 eclipse-mosquitto`
+   `Start the MQTT broker (Mosquitto installed locally):
+   `/usr/local/opt/mosquitto/sbin/mosquitto -c /usr/local/etc/mosquitto/mosquitto.conf -v`
+   (macOS Intel with Homebrew; on Linux use `mosquitto -v`; alternative with Docker:
+   `docker run -p 1883:1883 eclipse-mosquitto`)`
 2. Install dependencies:
    `pip install -r requirements.txt`
 3. Run the scenarios: TODO
