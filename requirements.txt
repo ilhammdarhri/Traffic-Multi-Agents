@@ -1,0 +1,6 @@
+paho-mqtt
+mesa
+owlready2
+numpy
+matplotlib
+pytest
