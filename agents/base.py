@@ -50,7 +50,7 @@ class UtilityAgent(Agent):
         best_action, best_value = None, float("-inf")
         for action in self.feasible_actions():
             value = self.utility(action)
-            if value > best_value:               # strict '>' : first maximum wins (deterministic)
+            if value > best_value + 1e-9:        # near-ties keep the first one (deterministic)
                 best_action, best_value = action, value
         if best_action is None:
             raise RuntimeError(f"{self.agent_id}: no feasible action")

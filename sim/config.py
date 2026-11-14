@@ -37,9 +37,12 @@ WEIGHTS = {
 }
 
 # --- Selfish baseline rule -----------------------------------------------
-# Each phase requests the green that would clear its own queue:
-#   g_req_k = min(GREEN_BUDGET - G_MIN, (Q0_k + lambda_k*C) / s)
-# If sum(g_req) > GREEN_BUDGET: scale proportionally, then enforce G_MIN.
+# Game between the phases (coordination/game.py): each phase requests r_k in
+# [G_MIN, GREEN_BUDGET - G_MIN]; the allocation is proportional,
+#   g_k = GREEN_BUDGET * r_k / sum_j(r_j)   (rounded, so sum g_k = GREEN_BUDGET).
+# Asking for more never lowers a phase's own green, so the maximum request is a weakly
+# dominant strategy: the selfish outcome (Nash equilibrium) is an equal split, whatever the
+# queues and weights. (Requesting only "what clears my queue" is NOT an equilibrium.)
 
 # --- Simulation -----------------------------------------------------------
 TIME_STEP = 1                  # s

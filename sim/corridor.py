@@ -19,7 +19,7 @@ DECISION_AT = 85
 
 
 class Corridor:
-    def __init__(self, rates=None, offsets=None, seed=0, kb=None, broker=None):
+    def __init__(self, rates=None, offsets=None, seed=0, kb=None, broker=None, strategy=None):
         self.rates = rates or config.ARRIVALS["normal"]
         n = config.N_INTERSECTIONS
         offsets = offsets or [0] * n
@@ -33,7 +33,7 @@ class Corridor:
                 ApproachAgent(c, p, (lambda p=p, sim=sim: len(sim.phases[p])), self.broker.client(f"aa-{c}-{p}"))
                 for p in (AVENUE, SIDE)]
             self.agents[c] = IntersectionAgent(c, self.broker.client(f"ia-{c}"),
-                                               arrival_rates=self.rates, kb=kb)
+                                               arrival_rates=self.rates, kb=kb, strategy=strategy)
             self.actuators[c] = Actuator(c, sim, self.broker.client(f"act-{c}"))
         self.vehicles = []                 # (start_time, agent)
         self.t = 0

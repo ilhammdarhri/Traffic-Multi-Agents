@@ -1,8 +1,10 @@
 """IntersectionAgent: chooses the green split of one intersection.
 
 Every cycle it observes the queues published by the ApproachAgents, forecasts with
-the utility model, and picks the split (g_avenue, g_side) maximising the summed
-utility under the coupling constraint  g_avenue + g_side = GREEN_BUDGET,  g_k >= G_MIN.
+the utility model, and builds the green-sharing game of its two phases. A coordination
+strategy (Strategy pattern, coordination/strategies.py) picks the split
+(g_avenue, g_side) under the coupling constraint  g_avenue + g_side = GREEN_BUDGET,
+g_k >= G_MIN. The default strategy is the social optimum (maximum summed utility).
 The plan is published on traffic/{carrefour}/signal/plan (QoS 1, retained).
 
 Knowledge base (optional) supplies:
@@ -14,10 +16,12 @@ Knowledge base (optional) supplies:
 Without a knowledge base, priority requests are ignored.
 
 Ties (the utility is flat when both queues stay positive) are broken in favour of
-the split closest to proportional to the green each phase needs.
+the split closest to proportional to the green each phase needs (GreenGame.ordered_splits).
 """
 from agents.base import UtilityAgent
 from agents.utility import UtilityFunction
+from coordination.game import GreenGame
+from coordination.strategies import resolve_strategy
 from sim import config, topics
 from sim.message import Message
 from sim.traffic import AVENUE, SIDE
@@ -28,9 +32,11 @@ EMERGENCY_HOLD_S = 6            # and kept this long after its expected arrival
 
 
 class IntersectionAgent(UtilityAgent):
-    def __init__(self, carrefour, mqtt, arrival_rates=None, weights=None, kb=None, agent_id=None):
+    def __init__(self, carrefour, mqtt, arrival_rates=None, weights=None, kb=None, agent_id=None,
+                 strategy=None):
         super().__init__(agent_id or f"ia-{carrefour}", mqtt=mqtt, kb=kb)
         self.carrefour = carrefour
+        self.strategy = resolve_strategy(strategy)  # name, instance or None (= social optimum)
         self.arrival_rates = dict(arrival_rates or config.ARRIVALS["normal"])
         self.weights = dict(weights or {})          # explicit overrides {phase: w}
         self.queues = {}                            # latest measure per direction
@@ -102,20 +108,19 @@ class IntersectionAgent(UtilityAgent):
         }
 
     # --- decision ---------------------------------------------------------
-    def _proportional_target(self):
-        fa, fs = (self.state["functions"][p] for p in PHASES)
-        need = fa.required_green() + fs.required_green()
-        share = fa.required_green() / need if need > 0 else 0.5
-        return config.GREEN_BUDGET * share
+    def game(self):
+        """The green-sharing game of the current state (one utility function per phase)."""
+        return GreenGame(self.state["functions"])
 
     def feasible_actions(self):
-        total, gmin = config.GREEN_BUDGET, config.G_MIN
-        target = self._proportional_target()
-        actions = [(ga, total - ga) for ga in range(gmin, total - gmin + 1)]
-        return sorted(actions, key=lambda a: (abs(a[0] - target), a[0]))
+        return self.game().ordered_splits()
 
     def utility(self, action):
         return sum(self.state["functions"][p](g) for p, g in zip(PHASES, action))
+
+    def decide(self):
+        """A_t: the split chosen by the coordination strategy for the current game."""
+        return self.strategy.choose_split(self.game())
 
     def act(self, action):
         plan = {AVENUE: action[0], SIDE: action[1]}
