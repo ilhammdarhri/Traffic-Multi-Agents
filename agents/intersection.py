@@ -33,9 +33,13 @@ EMERGENCY_HOLD_S = 6            # and kept this long after its expected arrival
 
 class IntersectionAgent(UtilityAgent):
     def __init__(self, carrefour, mqtt, arrival_rates=None, weights=None, kb=None, agent_id=None,
-                 strategy=None):
+                 strategy=None, position=0, offset=0, neighbors=None):
         super().__init__(agent_id or f"ia-{carrefour}", mqtt=mqtt, kb=kb)
         self.carrefour = carrefour
+        self.position = position                    # index along the avenue (0 = first)
+        self.offset = offset % config.CYCLE         # own cycle offset (s), kept up to date
+        self.neighbors = dict(neighbors or {})      # {carrefour name: position}
+        self.cycles = 0                             # decision cycles performed
         self.strategy = resolve_strategy(strategy)  # name, instance or None (= social optimum)
         self.arrival_rates = dict(arrival_rates or config.ARRIVALS["normal"])
         self.weights = dict(weights or {})          # explicit overrides {phase: w}
@@ -46,6 +50,7 @@ class IntersectionAgent(UtilityAgent):
         self.state = {"queues": {}, "functions": {}}
         mqtt.subscribe(topics.queue(carrefour, "+"), self._on_queue, kind="queue")
         mqtt.subscribe(topics.PRIORITY_REQUEST, self._on_priority, kind="priority")
+        self.strategy.attach(self)                  # e.g. consensus subscribes to its neighbours
 
     # --- perception -------------------------------------------------------
     def _on_queue(self, topic, message):
@@ -133,4 +138,6 @@ class IntersectionAgent(UtilityAgent):
             self.now = t
         action = self.step(dict(self.queues))
         self._boosts.clear()                        # a bus announcement lasts one decision
+        self.cycles += 1
+        self.strategy.coordinate_offsets(self)      # one consensus iteration per cycle
         return action

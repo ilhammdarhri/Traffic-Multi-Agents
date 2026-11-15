@@ -26,7 +26,7 @@ def test_strategy_is_abstract():
 
 
 def test_registry_and_factory():
-    assert set(STRATEGIES) == {"selfish", "nash", "centralized"}
+    assert set(STRATEGIES) == {"selfish", "nash", "consensus", "centralized"}
     assert isinstance(make_strategy("nash"), NashStrategy)
     with pytest.raises(ValueError):
         make_strategy("telepathy")
@@ -41,7 +41,7 @@ def test_resolve_strategy():
 
 # --- each strategy decides differently on the same state ----------------------------------
 @pytest.mark.parametrize("strategy,expected", [
-    ("selfish", (40, 40)), ("nash", (52, 28)), ("centralized", (53, 27))])
+    ("selfish", (40, 40)), ("nash", (52, 28)), ("consensus", (52, 28)), ("centralized", (53, 27))])
 def test_agent_decision_per_strategy(strategy, expected):
     assert agent(strategy).decide() == expected
 
@@ -69,8 +69,9 @@ def test_every_strategy_publishes_valid_plans():
 
 
 # --- closed loop: sensors -> agent(strategy) -> actuator -> simulator -------------------------
-def run_corridor(strategy, rates, seed=1, seconds=3600):
-    cor = Corridor(rates=rates, seed=seed, strategy=strategy)
+def run_corridor(strategy, rates, seed=1, seconds=3600, platoon=0.0):
+    """Independent intersections (platoon = 0): isolates the effect of the green split."""
+    cor = Corridor(rates=rates, seed=seed, strategy=strategy, platoon=platoon)
     worst = 0
     for _ in range(seconds):
         cor.step()
@@ -79,7 +80,7 @@ def run_corridor(strategy, rates, seed=1, seconds=3600):
 
 
 def test_scenarios_are_ordered_on_normal_demand():
-    results = {name: run_corridor(name, NORMAL) for name in STRATEGIES}
+    results = {name: run_corridor(name, NORMAL) for name in ("selfish", "nash", "centralized")}
     wait = {n: r[0] for n, r in results.items()}
     worst = {n: r[1] for n, r in results.items()}
     # selfish agents (equal split) starve the avenue, which needs 55 s of green

@@ -1,12 +1,17 @@
 """Queue simulator for one signalised intersection (1 s time step).
 
-Cycle layout for plan (g_avenue, g_side), offset o, cycle C, lost time l per phase:
-    local = (t - o) mod C
+Cycle layout for plan (g_avenue, g_side), lost time l per phase:
+    local = t - cycle_start
     avenue green : 0 <= local < g_a
     all red      : g_a <= local < g_a + l
     side green   : g_a + l <= local < g_a + l + g_s
     all red      : the rest (l seconds)
-A new plan only takes effect at the next cycle start.
+The first cycle starts at `offset` (mod C). A new plan only takes effect at the next cycle
+start.
+
+Offset shift (consensus on offsets): shift_next_cycle(d) stretches the avenue green of the next
+cycle by d seconds (d < 0 shortens it, never below g_min). That cycle lasts C + d seconds, so
+every later cycle starts d seconds later: the offset moves by d, with no jump between phases.
 
 Preemption (emergency vehicle): preempt(phase, duration, delay) schedules a priority
 green window starting `delay` seconds from now. If another phase is green at that
@@ -45,15 +50,22 @@ class PhaseQueue:
         self.arrived = int(q0)
         self.departed = 0
         self.waits = []                         # waiting time of each departed vehicle
+        self.last_departed = 0                  # vehicles that left during the last second
         self._credit = 0.0                      # fractional discharge capacity
 
     def __len__(self):
         return len(self.queue)
 
+    def inject(self, t, n):
+        """n vehicles reach the stop line at time t (coming from the upstream intersection)."""
+        self.queue.extend([t] * n)
+        self.arrived += n
+
     def step(self, t, green):
         n = int(self.rng.poisson(self.arrival_rate))
         self.queue.extend([t] * n)
         self.arrived += n
+        self.last_departed = 0
         if not green:
             self._credit = 0.0
             return
@@ -61,6 +73,7 @@ class PhaseQueue:
         while self._credit >= 1.0 and self.queue:
             self.waits.append(t - self.queue.popleft())
             self.departed += 1
+            self.last_departed += 1
             self._credit -= 1.0
         self._credit = min(self._credit, 1.0)
 
@@ -72,14 +85,18 @@ class PhaseQueue:
 class IntersectionSim:
     def __init__(self, carrefour, arrival_rates, offset=0, plan=None, seed=0, q0=config.INITIAL_QUEUE):
         self.carrefour = carrefour
-        self.offset = offset
-        self.cycle = config.CYCLE
+        self.cycle = config.CYCLE               # nominal cycle length C
         self.lost = config.LOST_PER_PHASE
         half = config.GREEN_BUDGET // 2
         self.plan = dict(plan) if plan else {AVENUE: half, SIDE: config.GREEN_BUDGET - half}
         if not validate_plan(self.plan):
             raise ValueError(f"invalid plan {self.plan}")
+        offset = offset % self.cycle
+        self.cycle_start = offset - self.cycle if offset > 0 else 0   # cycle in progress at t = 0
+        self.cycle_len = self.cycle             # length of that cycle (C, or C + shift)
+        self.cycle_plan = dict(self.plan)       # greens of that cycle (avenue stretched by a shift)
         self._pending = None
+        self._pending_shift = 0
         self._override = None                   # active preemption window
         self.preemptions = 0
         self.t = 0
@@ -94,8 +111,14 @@ class IntersectionSim:
         self._pending = {AVENUE: plan[AVENUE], SIDE: plan[SIDE]}
         return True
 
-    def set_offset(self, offset):
-        self.offset = offset
+    def shift_next_cycle(self, delta):
+        """Move the offset by `delta` seconds, smoothly (see module docstring).
+        Returns False for a non-integer or too large shift (|delta| > MAX_SHIFT)."""
+        if not isinstance(delta, int) or isinstance(delta, bool) or abs(delta) > config.MAX_SHIFT:
+            return False
+        total = self._pending_shift + delta
+        self._pending_shift = max(-config.MAX_SHIFT, min(config.MAX_SHIFT, total))
+        return True
 
     def preempt(self, phase, duration, delay=0):
         """Priority green for `phase`: window [t + delay, t + delay + duration).
@@ -113,11 +136,20 @@ class IntersectionSim:
         return True
 
     # --- state ------------------------------------------------------------
+    @property
+    def offset(self):
+        """Start of the cycle in progress, modulo C."""
+        return self.cycle_start % self.cycle
+
     def local_time(self):
-        return (self.t - self.offset) % self.cycle
+        return self.t - self.cycle_start
+
+    def cycle_remaining(self):
+        """Seconds left in the cycle in progress."""
+        return self.cycle_start + self.cycle_len - self.t
 
     def _base_signal(self):
-        local, g_a, g_s = self.local_time(), self.plan[AVENUE], self.plan[SIDE]
+        local, g_a, g_s = self.local_time(), self.cycle_plan[AVENUE], self.cycle_plan[SIDE]
         if local < g_a:
             return AVENUE
         if g_a + self.lost <= local < g_a + self.lost + g_s:
@@ -158,8 +190,18 @@ class IntersectionSim:
         for name, phase in self.phases.items():
             phase.step(self.t, green=(signal == name))
         self.t += 1
-        if self._pending and self.local_time() == 0:       # new cycle starts
+        if self.local_time() >= self.cycle_len:
+            self._start_cycle()
+
+    def _start_cycle(self):
+        """A new cycle starts: adopt the pending plan, apply the pending shift."""
+        self.cycle_start += self.cycle_len
+        if self._pending:
             self.plan, self._pending = self._pending, None
+        shift, self._pending_shift = self._pending_shift, 0
+        shift = max(shift, config.G_MIN - self.plan[AVENUE])       # keep g_avenue >= g_min
+        self.cycle_plan = {AVENUE: self.plan[AVENUE] + shift, SIDE: self.plan[SIDE]}
+        self.cycle_len = self.cycle + shift
 
     def run(self, seconds):
         for _ in range(seconds):

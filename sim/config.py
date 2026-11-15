@@ -49,6 +49,17 @@ TIME_STEP = 1                  # s
 DURATION = 3600                # s = 40 cycles
 SEEDS = list(range(10))        # 10 random seeds per scenario
 
-# --- Consensus ------------------------------------------------------------
-CONSENSUS_EPS = 0.5            # s, convergence threshold on offsets
+# --- Platoons (avenue flow from one intersection to the next) ---------------
+# A vehicle leaving intersection i on the avenue reaches intersection i+1 after
+# TRAVEL_TIME seconds with probability PLATOON_FRACTION (the others turn off). The rest of
+# the downstream avenue demand is external: (1 - PLATOON_FRACTION) * lambda_avenue.
+PLATOON_FRACTION = 0.8
+
+# --- Consensus on offsets -----------------------------------------------------
+# One consensus iteration per cycle. Aligned offset of intersection i (i = 0, 1, ...):
+#   a_i = (offset_i - i * TRAVEL_TIME) mod C   -> all equal means a green wave.
+#   shift_i = CONSENSUS_GAIN * sum_{j neighbour} wrap(a_j - a_i)     (circular difference)
+CONSENSUS_GAIN = 0.4           # step size alpha (stable if alpha < 2 / lambda_max(Laplacian))
+CONSENSUS_EPS = 0.5            # s, convergence threshold on |shift|
 CONSENSUS_MAX_ITER = 50        # timeout (alt fragment: converged / timeout)
+MAX_SHIFT = 10                 # s, largest change of the cycle length in one cycle (safety)

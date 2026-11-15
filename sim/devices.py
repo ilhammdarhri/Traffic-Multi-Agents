@@ -34,9 +34,19 @@ class Actuator:
         self.source = f"actuator-{carrefour}"
         self.rejected = 0                   # invalid plans / commands received
         self.preemptions = 0                # preemption commands applied
+        self.shifts = 0                     # offset shifts accepted
         self._last_state = None
         mqtt.subscribe(topics.signal_plan(carrefour), self._on_plan, kind="plan")
         mqtt.subscribe(topics.signal_preempt(carrefour), self._on_preempt, kind="preempt")
+        mqtt.subscribe(topics.signal_shift(carrefour), self._on_shift, kind="shift")
+
+    def _on_shift(self, topic, message):
+        v = message.valeur
+        shift = v.get("shift_s") if isinstance(v, dict) else None
+        if self.intersection.shift_next_cycle(shift):
+            self.shifts += 1
+        else:
+            self.rejected += 1              # not an integer, or larger than MAX_SHIFT
 
     def _on_plan(self, topic, message):
         if not self.intersection.set_plan(message.valeur):

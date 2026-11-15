@@ -3,39 +3,62 @@
 Per intersection: IntersectionSim + 2 ApproachAgents + IntersectionAgent + Actuator.
 Every simulated second:
     1. actuators report the displayed phase,
-    2. at local time DECISION_AT of its cycle (last red) each intersection agent measures
-       and publishes the plan for the next cycle,
+    2. DECISION_LEAD seconds before the end of its cycle (last all-red) each intersection agent
+       measures, publishes the plan for the next cycle and runs one consensus iteration,
     3. vehicle agents see the signals and move/request/pass,
-    4. the queue simulators advance by 1 s.
+    4. platoon vehicles scheduled to reach an intersection are added to its avenue queue,
+    5. the queue simulators advance by 1 s,
+    6. vehicles that left an intersection on the avenue are sent to the next one (TRAVEL_TIME later).
 """
+import copy
+from collections import defaultdict
+
 from agents.approach import ApproachAgent
 from agents.intersection import IntersectionAgent
+from coordination.consensus import wrap
+from coordination.strategies import CoordinationStrategy, resolve_strategy
 from sim import config
 from sim.devices import Actuator
 from sim.loopback import LoopbackBroker
-from sim.traffic import AVENUE, SIDE, IntersectionSim
+from sim.traffic import AVENUE, IntersectionSim
 
-DECISION_AT = 85
+DECISION_LEAD = config.LOST_PER_PHASE        # decide at the start of the last all-red (5 s before the end)
+
+
+def fresh_strategy(strategy):
+    """One strategy instance per agent (a strategy may keep per-agent state)."""
+    if isinstance(strategy, CoordinationStrategy):
+        return copy.deepcopy(strategy)
+    return resolve_strategy(strategy)
 
 
 class Corridor:
-    def __init__(self, rates=None, offsets=None, seed=0, kb=None, broker=None, strategy=None):
+    def __init__(self, rates=None, offsets=None, seed=0, kb=None, broker=None, strategy=None,
+                 platoon=config.PLATOON_FRACTION):
         self.rates = rates or config.ARRIVALS["normal"]
         n = config.N_INTERSECTIONS
-        offsets = offsets or [0] * n
+        offsets = list(offsets) if offsets is not None else [0] * n
+        self.platoon = platoon                    # share of avenue departures reaching the next intersection
         self.broker = broker or LoopbackBroker()
         self.carrefours = [f"carrefour{i}" for i in range(1, n + 1)]
         self.sims, self.approaches, self.agents, self.actuators = {}, {}, {}, {}
         for i, c in enumerate(self.carrefours):
-            sim = IntersectionSim(c, self.rates, offset=offsets[i], seed=seed + i)
+            neighbors = {self.carrefours[j]: j for j in (i - 1, i + 1) if 0 <= j < n}
+            rates_i = dict(self.rates)
+            if i > 0:                             # the rest of the avenue flow comes from upstream
+                rates_i[AVENUE] = (1 - platoon) * self.rates[AVENUE]
+            sim = IntersectionSim(c, rates_i, offset=offsets[i], seed=seed + i)
             self.sims[c] = sim
             self.approaches[c] = [
                 ApproachAgent(c, p, (lambda p=p, sim=sim: len(sim.phases[p])), self.broker.client(f"aa-{c}-{p}"))
-                for p in (AVENUE, SIDE)]
-            self.agents[c] = IntersectionAgent(c, self.broker.client(f"ia-{c}"),
-                                               arrival_rates=self.rates, kb=kb, strategy=strategy)
+                for p in (sim.phases)]
+            self.agents[c] = IntersectionAgent(
+                c, self.broker.client(f"ia-{c}"), arrival_rates=self.rates, kb=kb,
+                strategy=fresh_strategy(strategy), position=i, offset=offsets[i], neighbors=neighbors)
             self.actuators[c] = Actuator(c, sim, self.broker.client(f"act-{c}"))
-        self.vehicles = []                 # (start_time, agent)
+        self._inflight = [defaultdict(int) for _ in range(n)]   # per intersection: arrival time -> vehicles
+        self._carry = [0.0] * n                   # fractional vehicles kept between two seconds
+        self.vehicles = []                        # (start_time, agent)
         self.t = 0
 
     def add_vehicle(self, vehicle, start_t=0):
@@ -47,7 +70,7 @@ class Corridor:
         for act in self.actuators.values():
             act.tick()
         for c in self.carrefours:
-            if self.sims[c].local_time() == DECISION_AT:
+            if self.sims[c].cycle_remaining() == DECISION_LEAD:
                 for aa in self.approaches[c]:
                     aa.sense()
                 self.agents[c].decide_cycle(t)
@@ -55,8 +78,19 @@ class Corridor:
         for start_t, v in self.vehicles:
             if t >= start_t and not v.done:
                 v.step({"t": t, "signals": signals})
+        for i, c in enumerate(self.carrefours):          # platoon vehicles reaching the stop line now
+            arriving = self._inflight[i].pop(t, 0)
+            if arriving:
+                self.sims[c].phases[AVENUE].inject(t, arriving)
         for sim in self.sims.values():
             sim.step()
+        for i, c in enumerate(self.carrefours[:-1]):     # departures travel to the next intersection
+            left = self.sims[c].phases[AVENUE].last_departed
+            self._carry[i] += self.platoon * left
+            through = int(self._carry[i] + 1e-9)
+            self._carry[i] -= through
+            if through:
+                self._inflight[i + 1][t + config.TRAVEL_TIME] += through
         self.t += 1
 
     def run(self, seconds):
@@ -69,3 +103,9 @@ class Corridor:
         waits = sum(p.total_wait(self.t) for s in self.sims.values() for p in s.phases.values())
         arrived = sum(p.arrived for s in self.sims.values() for p in s.phases.values())
         return waits / arrived if arrived else 0.0
+
+    def offset_spread(self):
+        """Distance (s) from a perfect green wave: the largest circular gap between the aligned
+        offsets a_i = offset_i - i * T of two intersections (0 = perfect wave)."""
+        aligned = [self.sims[c].offset - i * config.TRAVEL_TIME for i, c in enumerate(self.carrefours)]
+        return max(abs(wrap(a - b, config.CYCLE)) for a in aligned for b in aligned)
