@@ -47,6 +47,10 @@ class IntersectionAgent(UtilityAgent):
         self.now = 0                                # simulation time, for event forecasts
         self._boosts = {}                           # phase -> weight announced by a bus
         self.preemptions = []                       # log of preemption commands sent
+        self.fallbacks = 0                          # fixed-time plans published (sensor loss)
+        self._heard = set()                         # directions whose sensor has spoken at least once
+        self._fresh = {p: False for p in PHASES}    # a measure arrived since the last decision
+        self._missed = {p: 0 for p in PHASES}       # consecutive decisions without a new measure
         self.state = {"queues": {}, "functions": {}}
         mqtt.subscribe(topics.queue(carrefour, "+"), self._on_queue, kind="queue")
         mqtt.subscribe(topics.PRIORITY_REQUEST, self._on_priority, kind="priority")
@@ -57,6 +61,8 @@ class IntersectionAgent(UtilityAgent):
         direction = topic.split("/")[3]
         if direction in PHASES:
             self.queues[direction] = message.valeur
+            self._heard.add(direction)
+            self._fresh[direction] = True
 
     def _on_priority(self, topic, message):
         v = message.valeur
@@ -132,11 +138,40 @@ class IntersectionAgent(UtilityAgent):
         msg = Message(source=self.agent_id, valeur=plan, unite="s")
         self.mqtt.publish(topics.signal_plan(self.carrefour), msg, "plan")
 
+    # --- sensor loss -------------------------------------------------------
+    @property
+    def degraded(self):
+        """A sensor that used to report has been silent for STALE_CYCLES decisions."""
+        return any(self._missed[p] >= config.STALE_CYCLES for p in PHASES)
+
+    def _track_sensors(self):
+        for p in PHASES:
+            if p in self._heard:                    # injected queues (no sensor yet) are never stale
+                self._missed[p] = 0 if self._fresh[p] else self._missed[p] + 1
+            self._fresh[p] = False
+
+    def fallback_split(self):
+        """Fixed-time plan from the knowledge base (rule: no data => fixed-time plan)."""
+        plan = config.FALLBACK_PLAN
+        if self.kb is not None:
+            try:
+                plan = self.kb.fallback_plan(self.carrefour)
+            except KeyError:
+                pass
+        return (plan[AVENUE], plan[SIDE])
+
     def decide_cycle(self, t=None):
         """One decision cycle from the latest received queue measures."""
         if t is not None:
             self.now = t
-        action = self.step(dict(self.queues))
+        self._track_sensors()
+        if self.degraded:                           # do not decide on stale measures
+            action = self.fallback_split()
+            self.fallbacks += 1
+            self.last_action = action
+            self.act(action)
+        else:
+            action = self.step(dict(self.queues))
         self._boosts.clear()                        # a bus announcement lasts one decision
         self.cycles += 1
         self.strategy.coordinate_offsets(self)      # one consensus iteration per cycle

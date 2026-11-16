@@ -55,7 +55,13 @@ class Corridor:
             self.agents[c] = IntersectionAgent(
                 c, self.broker.client(f"ia-{c}"), arrival_rates=self.rates, kb=kb,
                 strategy=fresh_strategy(strategy), position=i, offset=offsets[i], neighbors=neighbors)
-            self.actuators[c] = Actuator(c, sim, self.broker.client(f"act-{c}"))
+            fallback = config.FALLBACK_PLAN
+            if kb is not None:
+                try:
+                    fallback = kb.fallback_plan(c)
+                except KeyError:
+                    pass
+            self.actuators[c] = Actuator(c, sim, self.broker.client(f"act-{c}"), fallback_plan=fallback)
         self._inflight = [defaultdict(int) for _ in range(n)]   # per intersection: arrival time -> vehicles
         self._carry = [0.0] * n                   # fractional vehicles kept between two seconds
         self.vehicles = []                        # (start_time, agent)
@@ -65,12 +71,30 @@ class Corridor:
         self.vehicles.append((start_t, vehicle))
         return vehicle
 
+    # --- failures ------------------------------------------------------------
+    def crash_agent(self, c):
+        """The intersection agent dies without a goodbye (Last Will); its controller keeps cycling."""
+        self.agents[c].mqtt.crash()
+
+    def crash_sensor(self, c, direction):
+        """One loop detector stops publishing."""
+        for aa in self.approaches[c]:
+            if aa.direction == direction:
+                aa.mqtt.crash()
+
+    def recover_agent(self, c):
+        """The agent restarts: reconnects and resynchronises its offset with the real controller."""
+        agent = self.agents[c]
+        agent.mqtt.connect()
+        agent.offset = self.sims[c].offset % config.CYCLE
+
     def step(self):
         t = self.t
         for act in self.actuators.values():
             act.tick()
         for c in self.carrefours:
-            if self.sims[c].cycle_remaining() == DECISION_LEAD:
+            if (self.sims[c].cycle_remaining() == DECISION_LEAD
+                    and getattr(self.agents[c].mqtt, "alive", True)):
                 for aa in self.approaches[c]:
                     aa.sense()
                 self.agents[c].decide_cycle(t)

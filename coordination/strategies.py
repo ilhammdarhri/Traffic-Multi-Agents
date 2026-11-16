@@ -80,6 +80,18 @@ class ConsensusStrategy(NashStrategy):
         self.node = OffsetConsensus(agent.position, agent.neighbors, **self.options)
         for neighbor in agent.neighbors:
             agent.mqtt.subscribe(topics.offset(neighbor, "+"), self._on_offset, kind="offset")
+        if agent.neighbors:                 # who is alive? (retained status + Last Will of every agent)
+            self._agent_of = {f"ia-{neighbor}": neighbor for neighbor in agent.neighbors}
+            agent.mqtt.subscribe(topics.ALL_STATUS, self._on_status, kind="status")
+
+    def _on_status(self, topic, message):
+        neighbor = self._agent_of.get(topic.split("/")[2])
+        if neighbor is None:
+            return
+        if message.valeur == topics.STATUS_OFFLINE:
+            self.node.mark_offline(neighbor)
+        elif message.valeur == topics.STATUS_ONLINE:
+            self.node.mark_online(neighbor)
 
     def _on_offset(self, topic, message):
         value = message.valeur

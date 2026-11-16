@@ -2,7 +2,7 @@
 
 Both talk only through MQTT; they never call agents directly.
 """
-from sim import topics
+from sim import config, topics
 from sim.message import Message
 from sim.traffic import validate_plan
 
@@ -25,9 +25,14 @@ class Sensor:
 class Actuator:
     """Traffic light controller. Applies green plans received on signal/plan (next
     cycle) and preemption commands received on signal/preempt (immediately), and
-    reports the phase really displayed on signal/etat (retained)."""
+    reports the phase really displayed on signal/etat (retained).
 
-    def __init__(self, carrefour, intersection, mqtt):
+    Fail-safe: the controller keeps cycling on the last plan when its agent dies. If a
+    `fallback_plan` is given and no valid plan arrives for `plan_timeout` seconds
+    (default PLAN_TIMEOUT_CYCLES cycles), it switches to that fixed-time plan until a new
+    plan arrives. The cycle length, hence the offset, is not touched."""
+
+    def __init__(self, carrefour, intersection, mqtt, fallback_plan=None, plan_timeout=None):
         self.carrefour = carrefour
         self.intersection = intersection
         self.mqtt = mqtt
@@ -35,6 +40,12 @@ class Actuator:
         self.rejected = 0                   # invalid plans / commands received
         self.preemptions = 0                # preemption commands applied
         self.shifts = 0                     # offset shifts accepted
+        self.fallback_plan = dict(fallback_plan) if fallback_plan else None
+        self.plan_timeout = plan_timeout if plan_timeout is not None \
+            else config.PLAN_TIMEOUT_CYCLES * config.CYCLE
+        self.fallback_active = False
+        self.fallbacks = 0                  # times the fixed-time plan was activated
+        self._last_plan_t = intersection.t
         self._last_state = None
         mqtt.subscribe(topics.signal_plan(carrefour), self._on_plan, kind="plan")
         mqtt.subscribe(topics.signal_preempt(carrefour), self._on_preempt, kind="preempt")
@@ -49,7 +60,10 @@ class Actuator:
             self.rejected += 1              # not an integer, or larger than MAX_SHIFT
 
     def _on_plan(self, topic, message):
-        if not self.intersection.set_plan(message.valeur):
+        if self.intersection.set_plan(message.valeur):
+            self._last_plan_t = self.intersection.t
+            self.fallback_active = False
+        else:
             self.rejected += 1              # safety: never apply an invalid plan
 
     def _on_preempt(self, topic, message):
@@ -66,6 +80,11 @@ class Actuator:
 
     def tick(self):
         """Call once per simulated second; publishes only when the display changes."""
+        if (self.fallback_plan and not self.fallback_active
+                and self.intersection.t - self._last_plan_t >= self.plan_timeout
+                and self.intersection.set_plan(self.fallback_plan)):
+            self.fallback_active = True     # the agent is silent: fixed-time plan from the next cycle
+            self.fallbacks += 1
         state = self.intersection.current_signal()
         if state != self._last_state:
             self._last_state = state

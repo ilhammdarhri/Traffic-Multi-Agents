@@ -49,6 +49,12 @@ TIME_STEP = 1                  # s
 DURATION = 3600                # s = 40 cycles
 SEEDS = list(range(10))        # 10 random seeds per scenario
 
+# --- Failures --------------------------------------------------------------------
+# Fixed-time plan used when the adaptive loop is broken (same values as the knowledge base).
+FALLBACK_PLAN = {"avenue": 50, "side": 30}
+PLAN_TIMEOUT_CYCLES = 3        # actuator: no plan received for this many cycles -> fixed-time plan
+STALE_CYCLES = 2               # intersection agent: a sensor silent for this many cycles -> fixed-time plan
+
 # --- Platoons (avenue flow from one intersection to the next) ---------------
 # A vehicle leaving intersection i on the avenue reaches intersection i+1 after
 # TRAVEL_TIME seconds with probability PLATOON_FRACTION (the others turn off). The rest of

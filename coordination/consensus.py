@@ -15,6 +15,11 @@ Convergence  : |delta_i| < eps for `stable_rounds` consecutive iterations, once 
                has been heard (the node then reports `converged`).
 Timeout      : if not converged after `max_iter` iterations the node freezes (`timed_out`):
                offsets stay where they are instead of drifting on stale data.
+Failures     : when the Last Will of a neighbour says "offline" (mark_offline), its agent is down
+               but its signal controller keeps cycling at its last offset. A neighbour that was
+               heard stays in the average as a FIXED ANCHOR: the others align with it, so the green
+               wave survives. A neighbour that was never heard cannot anchor anything: it no longer
+               blocks the node (ready() ignores it). mark_online() restores it. forget() removes it.
 This class is pure (no MQTT): ConsensusStrategy feeds it the messages.
 """
 from sim import config
@@ -36,6 +41,7 @@ class OffsetConsensus:
         self.max_iter, self.max_shift = max_iter, max_shift
         self.stable_rounds = stable_rounds
         self.aligned = {}                         # last a_j received from each neighbour
+        self.offline = set()                      # neighbours whose Last Will said "offline"
         self.iteration = 0
         self.last_delta = 0.0
         self.converged = False
@@ -56,16 +62,26 @@ class OffsetConsensus:
         """Drop a neighbour (e.g. it went offline): it no longer takes part in the average."""
         self.neighbors.pop(neighbor, None)
         self.aligned.pop(neighbor, None)
+        self.offline.discard(neighbor)
+
+    def mark_offline(self, neighbor):
+        """The neighbour's agent is down (Last Will). Its last offset stays as a fixed anchor."""
+        if neighbor in self.neighbors:
+            self.offline.add(neighbor)
+
+    def mark_online(self, neighbor):
+        self.offline.discard(neighbor)
 
     def ready(self):
-        return all(n in self.aligned for n in self.neighbors)
+        """Every neighbour that is not known to be down has been heard."""
+        return all(n in self.aligned for n in self.neighbors if n not in self.offline)
 
     # --- one iteration -----------------------------------------------------------
     def update(self, own_offset):
         """Run one iteration; return the shift (integer seconds) to apply next cycle."""
         self.iteration += 1
-        if self.timed_out or not self.neighbors or not self.ready():
-            return 0
+        if self.timed_out or not self.aligned or not self.ready():
+            return 0                              # nothing (usable) heard yet: no decision, no "convergence"
         own = self.align(own_offset, self.position)
         delta = self.gain * sum(wrap(a - own, self.cycle) for a in self.aligned.values())
         self.last_delta = delta
