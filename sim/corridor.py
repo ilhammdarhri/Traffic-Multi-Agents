@@ -71,6 +71,11 @@ class Corridor:
         self.vehicles.append((start_t, vehicle))
         return vehicle
 
+    def _settle(self):
+        settle = getattr(self.broker, "settle", None)
+        if settle:
+            settle()
+
     # --- failures ------------------------------------------------------------
     def crash_agent(self, c):
         """The intersection agent dies without a goodbye (Last Will); its controller keeps cycling."""
@@ -97,7 +102,9 @@ class Corridor:
                     and getattr(self.agents[c].mqtt, "alive", True)):
                 for aa in self.approaches[c]:
                     aa.sense()
+                self._settle()                  # real broker: measures delivered before deciding
                 self.agents[c].decide_cycle(t)
+                self._settle()                  # ... and plans / offsets delivered before moving on
         signals = {c: self.sims[c].current_signal() for c in self.carrefours}
         for start_t, v in self.vehicles:
             if t >= start_t and not v.done:

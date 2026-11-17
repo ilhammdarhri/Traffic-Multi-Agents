@@ -4,7 +4,9 @@ Features: publish Message objects with the QoS/retained flags of sim.topics,
 subscribe with per-pattern callbacks, online status + Last Will and Testament.
 Works with paho-mqtt 1.x and 2.x.
 """
+import socket
 import threading
+import time
 
 import paho.mqtt.client as mqtt
 
@@ -26,17 +28,20 @@ def topic_matches(pattern, topic):
 
 
 class MqttClient:
-    def __init__(self, agent_id, host="localhost", port=1883, keepalive=10):
+    def __init__(self, agent_id, host="localhost", port=1883, keepalive=10, client_id=None):
         self.agent_id = agent_id
         self.host, self.port, self.keepalive = host, port, keepalive
         self._subs = []                # list of (pattern, qos, callback)
         self._lock = threading.Lock()
         self._connected = threading.Event()
+        self._sync, self._sync_topic, self._sync_subscribed = \
+            threading.Event(), f"sma/sync/{agent_id}", False
+        self._token = b""
 
         if hasattr(mqtt, "CallbackAPIVersion"):
-            self._c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=agent_id)
+            self._c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id or agent_id)
         else:
-            self._c = mqtt.Client(client_id=agent_id)
+            self._c = mqtt.Client(client_id=client_id or agent_id)
 
         # Last Will: if this agent dies without a clean disconnect, the broker
         # publishes "offline" (retained) on its status topic.
@@ -52,6 +57,10 @@ class MqttClient:
     # --- connection -------------------------------------------------------
     def connect(self, timeout=5):
         self._c.connect(self.host, self.port, self.keepalive)
+        try:                                # small packets, lockstep runs: no Nagle delay
+            self._c.socket().setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except (OSError, AttributeError):
+            pass
         self._c.loop_start()
         if not self._connected.wait(timeout):
             raise ConnectionError(f"no broker answer on {self.host}:{self.port}")
@@ -78,6 +87,25 @@ class MqttClient:
         if sock is not None:
             sock.close()
 
+    def ping(self, timeout=6):
+        """Round trip through the broker on our own connection (QoS 2). The broker handles a
+        client's packets in order, so when the echo comes back everything this client published
+        before has been routed, and everything routed to it before has been delivered."""
+        self.ping_send()
+        self.ping_wait(timeout)
+
+    def ping_send(self):
+        if not self._sync_subscribed:
+            self._c.subscribe(self._sync_topic, 2)
+            self._sync_subscribed = True
+        self._sync.clear()
+        self._token = f"{time.time()}".encode()
+        self._c.publish(self._sync_topic, self._token, qos=2, retain=False)
+
+    def ping_wait(self, timeout=6):
+        if not self._sync.wait(timeout):
+            raise TimeoutError(f"{self.agent_id}: no echo from the broker")
+
     # --- publish / subscribe ----------------------------------------------
     def publish_status(self, state):
         self._c.publish(self._status_topic, self._status_payload(state),
@@ -97,6 +125,10 @@ class MqttClient:
         self._c.subscribe(pattern, qos)
 
     def _on_message(self, client, userdata, msg):
+        if msg.topic.startswith("sma/sync/"):
+            if msg.payload == self._token:
+                self._sync.set()
+            return
         try:
             message = Message.from_json(msg.payload)
         except ValueError:
