@@ -66,9 +66,13 @@ class Recorder:
         }
 
 
-def run_experiment(scenario, rates, seed, duration=config.DURATION, kb=None, broker=None):
-    """Run one scenario with one seed and return its metrics (a dict)."""
+def run_experiment(scenario, rates, seed, duration=config.DURATION, kb=None, broker=None, events=()):
+    """Run one scenario with one seed and return its metrics (a dict).
+    events: (time, function(corridor)) pairs run just before that second, e.g. a crash."""
     rec = Recorder(make_corridor(scenario, rates, seed, kb=kb, broker=broker))
+    pending = sorted(events, key=lambda e: e[0])
     for _ in range(duration):
+        while pending and pending[0][0] <= rec.cor.t:
+            pending.pop(0)[1](rec.cor)
         rec.step()
     return rec.summary()
