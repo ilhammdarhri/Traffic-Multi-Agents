@@ -1,6 +1,5 @@
-paho-mqtt
-mesa
-owlready2
-numpy
-matplotlib
-pytest
+paho-mqtt>=1.6
+owlready2>=0.45
+numpy>=1.24
+matplotlib>=3.7
+pytest>=7.0
