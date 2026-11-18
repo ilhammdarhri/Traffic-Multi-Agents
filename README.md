@@ -16,7 +16,7 @@ Python 3.8 or newer and an MQTT broker on `localhost:1883`.
 ```bash
 brew install mosquitto && brew services start mosquitto      # macOS; or: mosquitto -v
 pip install -r requirements.txt
-python -m pytest -q tests          # 219 tests; the 6 that need the broker are skipped without it
+python -m pytest -q tests          # 223 tests; the 6 that need the broker are skipped without it
 ```
 
 Only the real-broker run needs Mosquitto; everything else runs in-process (see *Two brokers* below).
@@ -29,6 +29,7 @@ Only the real-broker run needs Mosquitto; everything else runs in-process (see *
 | `python -m sim.run_experiments --broker mqtt --seeds 1 --duration 900` | same runs through the **real MQTT broker**, checked against the in-process run (must print `8/8 runs identical`) | `results/*_mqtt.csv` | ~2 min |
 | `python -m sim.studies all --seeds 10` | Q1, Q2, Q3 studies | `results/q1_*.csv`, `q2_*.csv`, `q3_*.csv` | ~10 min |
 | `python -m sim.figures` | the 8 figures of the report | `results/figures/*.png` and `.pdf` | ~20 s |
+| `python -m sim.replay` | records 13 demo cases and builds **one page, `results/replay.html`**: open it in a browser (no server, no internet) | `results/replay.html` | ~5 s |
 | `python -m sim.compare_strategies --seeds 5` | quick console comparison of the four scenarios | console | ~2 min |
 
 Everything is seeded: the same command gives the same files. Parameters live in one file, `sim/config.py`.
@@ -48,6 +49,14 @@ Everything is seeded: the same command gives the same files. Parameters live in 
   default 0.4). If an agent dies after it has announced its offset, its neighbours keep it as an anchor and
   the wave survives (mean wait +0.4 to +1 s). If it dies before ever speaking, nobody can align with it.
 - **Q3.** Preemption removes the emergency vehicle's delay (15 s → 0 s) for +0.9 to +2.3 % mean wait of the others.
+
+## Visual replay
+
+`results/replay.html` replays a whole execution: the avenue with its lights and queues, the time-space diagram
+(green bars per intersection and the groups of vehicles travelling between them: a green wave is when the lines
+meet the next green bar), and the distance to the green wave and mean wait over time. 13 cases: the four
+scenarios at normal and peak demand, three agent failures and an ambulance with and without priority. Two cases
+can be shown side by side. All cases use seed 17, so the same vehicles arrive in each.
 
 ## How it works
 
@@ -110,7 +119,7 @@ message has been delivered before the clock moves on). Both give identical resul
 | `agents/` | Agent, UtilityAgent, IntersectionAgent, ApproachAgent, emergency and bus agents |
 | `coordination/` | game theory, strategies (Selfish, Nash, Consensus, Centralized), consensus on offsets |
 | `kb/` | OWL knowledge base and its query layer |
-| `sim/` | simulator, MQTT client, sensors and actuators, brokers, metrics, experiments, studies, figures |
+| `sim/` | simulator, MQTT client, sensors and actuators, brokers, metrics, experiments, studies, figures, trace recorder and replay page |
 | `tests/` | unit and integration tests |
 | `results/` | CSV results and `figures/` |
 

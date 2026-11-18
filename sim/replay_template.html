@@ -1,0 +1,370 @@
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Corridor Replay</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout: a control strip over one or two panels (avenue view, time-space diagram, metrics). */
+:root{
+  --bg:#F3F5F8; --surface:#FFFFFF; --fg:#111827; --muted:#566074; --line:#D9DFE8;
+  --road:#D3D9E4; --mark:#F3F5F8; --veh:#6C7A97; --move:#1F5AA3; --traj:#3B4A6B;
+  --green:#1F9D63; --red:#E2474C; --amber:#B97A00; --accent:#1F5AA3; --tint:#E9EEF6;
+  --c-selfish:#2a78d6; --c-nash:#e0612c; --c-consensus:#13906a; --c-centralized:#c78f00;
+  --font-head:'Space Grotesk',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --font-body:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0E1420; --surface:#151D2C; --fg:#E8ECF4; --muted:#9AA6BD; --line:#26314A;
+  --road:#2B3650; --mark:#151D2C; --veh:#8593B0; --move:#7FB0F2; --traj:#9FB0D4;
+  --green:#3DD68C; --red:#FF6B72; --amber:#F0B429; --accent:#7FB0F2; --tint:#1B2740;
+  --c-selfish:#4a95ee; --c-nash:#f2834f; --c-consensus:#2fc796; --c-centralized:#f0b429; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0E1420; --surface:#151D2C; --fg:#E8ECF4; --muted:#9AA6BD; --line:#26314A;
+  --road:#2B3650; --mark:#151D2C; --veh:#8593B0; --move:#7FB0F2; --traj:#9FB0D4;
+  --green:#3DD68C; --red:#FF6B72; --amber:#F0B429; --accent:#7FB0F2; --tint:#1B2740;
+  --c-selfish:#4a95ee; --c-nash:#f2834f; --c-consensus:#2fc796; --c-centralized:#f0b429; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:15px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-block:24px 40px}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+.wrap{max-width:1320px;margin:0 auto}
+h1{font-family:var(--font-head);font-size:clamp(26px,4vw,38px);line-height:1.1;margin:0 0 6px;font-weight:700;text-wrap:balance}
+.sub{color:var(--muted);margin:0 0 18px;max-width:70ch}
+.pick{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:flex-end}
+.pick label{display:flex;flex-direction:column;gap:4px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);min-width:0}
+select,button{font:inherit;color:var(--fg)}
+select{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:230px;max-width:100%}
+button{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.presets{display:flex;flex-wrap:wrap;gap:8px}
+.presets button{font-size:13px}
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);margin:16px 0;padding:10px 0;border-block:1px solid var(--line)}
+.ctl{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+#play{min-width:92px;background:var(--accent);border-color:var(--accent);color:var(--bg);font-weight:600}
+.speed{display:flex;gap:4px}
+.speed button{padding:6px 10px;font-size:13px}
+.speed button[aria-pressed="true"]{background:var(--tint);border-color:var(--accent);color:var(--accent);font-weight:600}
+.slide{flex:1 1 320px;min-width:0;position:relative;padding-bottom:12px}
+input[type=range]{width:100%;accent-color:var(--accent);margin:0}
+.ticks{position:absolute;left:8px;right:8px;bottom:0;height:10px;pointer-events:none}
+.ticks i{position:absolute;top:0;width:2px;height:10px;background:var(--red);border-radius:1px}
+#clock{font-variant-numeric:tabular-nums;font-weight:600;min-width:13ch}
+.panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,600px),1fr));gap:16px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;min-width:0;display:flex;flex-direction:column;gap:10px}
+.phead{display:flex;align-items:center;gap:10px}
+.phead h2{font-family:var(--font-head);font-size:20px;margin:0;font-weight:700}
+.dot{width:12px;height:12px;border-radius:50%;flex:none}
+.note{margin:0;color:var(--muted);font-size:14px}
+canvas{display:block;width:100%;border-radius:8px;background:var(--bg)}
+.avenue{aspect-ratio:3.6/1;min-height:215px}
+.ts{aspect-ratio:2.6/1;min-height:200px}
+.charts{aspect-ratio:4.2/1;min-height:120px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
+.stat{background:var(--tint);border-radius:8px;padding:8px 10px;min-width:0}
+.stat b{display:block;font-family:var(--font-head);font-size:22px;line-height:1.15;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.stat span{font-size:12px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.stat.good b{color:var(--green)}
+h3{font-family:var(--font-head);font-size:14px;margin:6px 0 0;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:500}
+.cap{margin:0;font-size:13px;color:var(--muted)}
+.events{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;font-size:13px;min-height:20px}
+.events li{display:flex;gap:10px}
+.events .tm{color:var(--muted);font-variant-numeric:tabular-nums;flex:none;min-width:7ch}
+footer{margin-top:20px;color:var(--muted);font-size:13px;max-width:100ch}
+footer p{margin:0 0 6px}
+.sw{display:inline-block;width:12px;height:10px;border-radius:2px;vertical-align:-1px;margin-right:4px}
+@media (max-width:520px){select{min-width:0;width:100%}.pick label{flex:1 1 100%}.panel{padding:12px}}
+</style>
+
+<div class="wrap">
+  <h1>Corridor replay</h1>
+  <p class="sub">Three intersections along one avenue. Pick a case, press play, and watch the lights, the queues and the green wave form. Every case uses the same seed, so the same vehicles arrive in all of them.</p>
+  <div class="pick">
+    <label for="selA">Case<select id="selA"></select></label>
+    <label for="selB">Compare with<select id="selB"></select></label>
+    <div class="presets" id="presets"></div>
+  </div>
+  <div class="bar"><div class="ctl">
+    <button id="play" type="button">Play</button>
+    <button id="restart" type="button">Restart</button>
+    <div class="speed" id="speed" role="group" aria-label="Playback speed"></div>
+    <div class="slide"><input id="slider" type="range" min="0" max="3599" step="1" value="0" aria-label="Time in seconds"><div class="ticks" id="ticks"></div></div>
+    <div id="clock" aria-live="off">t = 0 s</div>
+  </div></div>
+  <main class="panels" id="panels"></main>
+  <footer>
+    <p><span class="sw" style="background:var(--green)"></span>Green light or green band on the avenue. Grey squares are queued vehicles, blue squares are vehicles driving to the next intersection (30 s).</p>
+    <p>Time-space diagram: each row is one intersection. A green bar shows when its avenue light is green; each thin line is a group of vehicles leaving one intersection and arriving at the next. When the lines meet the next green bar, there is a green wave.</p>
+    <p>Distance to the green wave is how far the offsets are from the ideal ones (0 s = perfect). Seed 17, normal or peak demand, 90 s cycle.</p>
+  </footer>
+</div>
+
+<script>
+const TRACES = /*__TRACES__*/[];
+const byName = Object.fromEntries(TRACES.map(t => [t.meta.name, t]));
+const SPEEDS = [1, 5, 15, 60];
+const state = {a: 'normal-consensus', b: '', t: 540, playing: false, speed: 15, last: 0, dirty: true};
+let panels = [];
+let tmax = 3600;
+const $ = id => document.getElementById(id);
+const reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---------- colours (read from the theme tokens at every frame) ---------- */
+function colors() {
+  const cs = getComputedStyle(document.documentElement), g = n => cs.getPropertyValue(n).trim();
+  return {bg: g('--bg'), surface: g('--surface'), fg: g('--fg'), muted: g('--muted'), line: g('--line'),
+    road: g('--road'), mark: g('--mark'), veh: g('--veh'), move: g('--move'), green: g('--green'),
+    red: g('--red'), amber: g('--amber'), traj: g('--traj'),
+    scen: {selfish: g('--c-selfish'), nash: g('--c-nash'), consensus: g('--c-consensus'), centralized: g('--c-centralized')}};
+}
+function fit(cv) {
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, r.width, r.height);
+  return {ctx, w: r.width, h: r.height};
+}
+const FONT = 'Inter, system-ui, sans-serif';
+
+/* ---------- avenue view ---------- */
+function drawAvenue(p, t, C) {
+  const {ctx, w, h} = fit(p.cv.avenue), tr = p.tr, cs = tr.carrefours;
+  const i = Math.min(Math.floor(t), tr.meta.duration - 1);
+  const roadH = Math.max(22, h * 0.14), roadY = h * 0.56, xs = [0.2, 0.5, 0.8].map(f => f * w);
+  const s = Math.max(5, Math.min(9, w / 110)), step = s + 2;
+  ctx.fillStyle = C.road;
+  ctx.fillRect(0, roadY - roadH / 2, w, roadH);
+  xs.forEach(x => ctx.fillRect(x - roadH / 2, 0, roadH, h));
+  ctx.strokeStyle = C.mark; ctx.lineWidth = 1.5; ctx.setLineDash([6, 8]);
+  ctx.beginPath(); ctx.moveTo(0, roadY); ctx.lineTo(w, roadY); ctx.stroke(); ctx.setLineDash([]);
+  cs.forEach((c, k) => {
+    const d = tr.c[c], x = xs[k], sig = d.sig[i];
+    ctx.fillStyle = sig === 'A' ? C.green : C.red;
+    ctx.fillRect(x - roadH / 2 - 5, roadY - roadH / 2, 4, roadH);
+    ctx.fillStyle = sig === 'S' ? C.green : C.red;
+    ctx.fillRect(x - roadH / 2, roadY - roadH / 2 - 5, roadH, 4);
+    // avenue queue, to the left of the stop line
+    const q = d.qa[i], startX = x - roadH / 2 - 8 - s, lim = k ? xs[k - 1] + roadH / 2 + 14 : 6;
+    const cap = Math.max(0, Math.floor((startX - lim) / step) + 1);
+    ctx.fillStyle = C.veh;
+    for (let j = 0; j < Math.min(q, cap); j++) ctx.fillRect(startX - j * step, roadY - s / 2, s, s);
+    ctx.fillStyle = C.fg; ctx.font = `600 12px ${FONT}`; ctx.textAlign = 'right';
+    ctx.fillText(q + (q > cap ? ' ›' : ''), x - roadH / 2 - 8, roadY + roadH / 2 + 15);
+    // side queue, above the stop line
+    const qs = d.qs[i], startY = roadY - roadH / 2 - 9 - s, capS = Math.max(0, Math.floor((startY - 16) / step) + 1);
+    ctx.fillStyle = C.veh;
+    for (let j = 0; j < Math.min(qs, capS); j++) ctx.fillRect(x - s / 2, startY - j * step, s, s);
+    ctx.fillStyle = C.fg; ctx.textAlign = 'left';
+    ctx.fillText(qs + (qs > capS ? ' ↑' : ''), x + s / 2 + 6, startY + s);
+    // vehicles driving to the next intersection
+    const x0 = x + roadH / 2 + 4, x1 = k < 2 ? xs[k + 1] - roadH / 2 - 8 : w, arr = k < 2 ? d.thr : d.dep;
+    ctx.fillStyle = C.move;
+    for (let kk = Math.max(0, i - 30); kk <= i; kk++) {
+      const n = arr[kk]; if (!n) continue;
+      const f = (t - kk) / 30; if (f < 0 || f > 1) continue;
+      for (let j = 0; j < n; j++) ctx.fillRect(x0 + f * (x1 - x0) - j * (s + 1), roadY - s / 2, s, s);
+    }
+    // labels under the road
+    const yb = roadY + roadH / 2 + 30;
+    ctx.textAlign = 'center'; ctx.fillStyle = C.fg; ctx.font = `700 13px ${FONT}`;
+    ctx.fillText('C' + (k + 1), x, yb);
+    ctx.font = `400 12px ${FONT}`; ctx.fillStyle = C.muted;
+    ctx.fillText(`offset ${d.off[i]} s`, x, yb + 15);
+    ctx.fillText(`green ${d.ga[i]}/${d.gs[i]}`, x, yb + 30);
+    if (!d.up[i]) { ctx.fillStyle = C.red; ctx.font = `600 12px ${FONT}`; ctx.fillText(d.fb[i] ? 'agent offline · fixed plan' : 'agent offline', x, yb + 45); }
+    else if (d.fb[i]) { ctx.fillStyle = C.amber; ctx.font = `600 12px ${FONT}`; ctx.fillText('fixed plan', x, yb + 45); }
+  });
+  if (tr.ev && tr.ev[i] != null) {                       // ambulance
+    const pos = tr.ev[i], x = Math.max(8, Math.min(w - 8, xs[0] + pos * (xs[1] - xs[0])));
+    const pulse = reduceMotion ? 0 : (performance.now() % 900) / 900 * 8;
+    ctx.fillStyle = C.red; ctx.globalAlpha = 0.25; ctx.beginPath(); ctx.arc(x, roadY, 10 + pulse, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+    ctx.beginPath(); ctx.arc(x, roadY, 8, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.fillRect(x - 1.5, roadY - 5, 3, 10); ctx.fillRect(x - 5, roadY - 1.5, 10, 3);
+    ctx.fillStyle = C.red; ctx.font = `600 12px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText('ambulance', Math.max(36, Math.min(w - 36, x)), roadY - 16);
+  }
+}
+
+/* ---------- time-space diagram ---------- */
+function drawSpace(p, t, C) {
+  const {ctx, w, h} = fit(p.cv.ts), tr = p.tr, cs = tr.carrefours;
+  const L = 34, R = 8, T = 14, B = 22, W = 600, plotW = w - L - R, plotH = h - T - B, px = plotW / W;
+  const t0 = t - 420, X = a => L + (a - t0) * px, Y = k => T + (k + 0.5) * plotH / 3;
+  const i = Math.min(Math.floor(t), tr.meta.duration - 1), bh = Math.max(8, plotH / 3 * 0.34);
+  ctx.font = `400 11px ${FONT}`; ctx.textAlign = 'center';
+  for (let a = Math.ceil(t0 / 90) * 90; a <= t0 + W; a += 90) {
+    if (a < 0) continue;
+    ctx.strokeStyle = C.line; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(X(a), T); ctx.lineTo(X(a), T + plotH); ctx.stroke();
+    ctx.fillStyle = C.muted; ctx.fillText(a + ' s', X(a), h - 6);
+  }
+  cs.forEach((c, k) => {
+    ctx.strokeStyle = C.line; ctx.beginPath(); ctx.moveTo(L, Y(k)); ctx.lineTo(w - R, Y(k)); ctx.stroke();
+    ctx.fillStyle = C.fg; ctx.font = `700 12px ${FONT}`; ctx.textAlign = 'left'; ctx.fillText('C' + (k + 1), 4, Y(k) + 4);
+    const sig = tr.c[c].sig, a0 = Math.max(0, Math.floor(t0)), a1 = Math.min(tr.meta.duration - 1, Math.floor(t0 + W));
+    ctx.fillStyle = C.green;
+    for (let a = a0; a <= a1; a++) if (sig[a] === 'A') {
+      ctx.globalAlpha = a <= i ? 0.95 : 0.3;
+      ctx.fillRect(X(a), Y(k) - bh / 2, px + 0.6, bh);
+    }
+    ctx.globalAlpha = 1;
+  });
+  ctx.strokeStyle = C.traj; ctx.lineWidth = 1; ctx.globalAlpha = 0.6; ctx.beginPath();
+  for (let k = 0; k < 2; k++) {
+    const thr = tr.c[cs[k]].thr, dy = Y(k + 1) - Y(k);
+    for (let a = Math.max(0, Math.floor(t0 - 30)); a <= i; a++) if (thr[a] > 0) {
+      const ae = Math.min(a + 30, t);
+      ctx.moveTo(X(a), Y(k)); ctx.lineTo(X(ae), Y(k) + dy * (ae - a) / 30);
+    }
+  }
+  ctx.stroke(); ctx.globalAlpha = 1;
+  (tr.events || []).forEach(e => {                        // crashes and restarts
+    if (e.t < t0 || e.t > t0 + W || !/crash|restart|never/.test(e.text)) return;
+    ctx.strokeStyle = C.red; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(X(e.t), T); ctx.lineTo(X(e.t), T + plotH); ctx.stroke(); ctx.setLineDash([]);
+  });
+  if (tr.ev) {                                            // ambulance path
+    ctx.strokeStyle = C.red; ctx.lineWidth = 2; ctx.beginPath(); let on = false;
+    for (let a = Math.max(0, Math.floor(t0)); a <= i; a++) {
+      const v = tr.ev[a]; if (v == null) { on = false; continue; }
+      const y = Y(0) + v * (Y(1) - Y(0)); on ? ctx.lineTo(X(a), y) : ctx.moveTo(X(a), y); on = true;
+    }
+    ctx.stroke();
+  }
+  ctx.fillStyle = C.bg; ctx.globalAlpha = 0.35; ctx.fillRect(X(t), T, L + plotW - X(t), plotH); ctx.globalAlpha = 1;
+  ctx.strokeStyle = C.fg; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(X(t), T - 4); ctx.lineTo(X(t), T + plotH); ctx.stroke();
+  ctx.fillStyle = C.fg; ctx.font = `600 11px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText('now', X(t), 10);
+}
+
+/* ---------- metric curves ---------- */
+function curve(ctx, C, x0, x1, h, arr, max, i, color, title, unit) {
+  const L = x0 + 30, R = x1 - 6, T = 22, B = 14, pw = R - L, ph = h - T - B, n = arr.length;
+  const X = k => L + k / (n - 1) * pw, Y = v => T + ph - Math.min(v, max) / max * ph;
+  ctx.strokeStyle = C.line; ctx.lineWidth = 1;
+  [0, 0.5, 1].forEach(f => { const y = T + ph - f * ph; ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(R, y); ctx.stroke(); });
+  ctx.fillStyle = C.muted; ctx.font = `400 11px ${FONT}`; ctx.textAlign = 'right';
+  ctx.fillText(String(max), L - 4, T + 4); ctx.fillText('0', L - 4, T + ph + 4);
+  const stride = Math.max(1, Math.floor(n / pw));
+  ctx.lineWidth = 2; ctx.strokeStyle = color; ctx.globalAlpha = 0.28; ctx.beginPath();
+  for (let k = 0; k < n; k += stride) k ? ctx.lineTo(X(k), Y(arr[k])) : ctx.moveTo(X(k), Y(arr[k]));
+  ctx.stroke(); ctx.globalAlpha = 1; ctx.beginPath();
+  for (let k = 0; k <= i; k += stride) k ? ctx.lineTo(X(k), Y(arr[k])) : ctx.moveTo(X(k), Y(arr[k]));
+  ctx.lineTo(X(i), Y(arr[i])); ctx.stroke();
+  ctx.fillStyle = color; ctx.beginPath(); ctx.arc(X(i), Y(arr[i]), 4, 0, 7); ctx.fill();
+  ctx.fillStyle = C.fg; ctx.font = `600 12px ${FONT}`; ctx.textAlign = 'left'; ctx.fillText(title, L, 13);
+  ctx.textAlign = 'right'; ctx.fillText(arr[i].toFixed(unit === 's' && max > 60 ? 1 : 0) + ' ' + unit, R, 13);
+}
+function drawCharts(p, t, C) {
+  const {ctx, w, h} = fit(p.cv.charts), tr = p.tr, i = Math.min(Math.floor(t), tr.meta.duration - 1);
+  const col = C.scen[tr.meta.scenario] || C.move, mid = w / 2;
+  const wmax = Math.max(20, Math.ceil(Math.max(...tr.wait) / 20) * 20);
+  curve(ctx, C, 0, mid, h, tr.gap, 45, i, col, w < 330 ? 'Wave gap' : 'Distance to green wave', 's');
+  curve(ctx, C, mid, w, h, tr.wait, wmax, i, col, w < 330 ? 'Mean wait' : 'Mean wait so far', 's');
+  ctx.strokeStyle = C.fg; ctx.lineWidth = 1; ctx.globalAlpha = 0.5;
+  [[0, mid], [mid, w]].forEach(([a, b]) => { const x = a + 30 + i / (tr.wait.length - 1) * (b - 6 - a - 30); ctx.beginPath(); ctx.moveTo(x, 20); ctx.lineTo(x, h - 14); ctx.stroke(); });
+  ctx.globalAlpha = 1;
+}
+
+/* ---------- panels ---------- */
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c])); }
+function makePanel(tr) {
+  const el = document.createElement('article'); el.className = 'panel';
+  const ev = tr.meta.ev_delay != null;
+  el.innerHTML = `<div class="phead"><span class="dot" style="background:var(--c-${tr.meta.scenario === 'centralized' ? 'centralized' : tr.meta.scenario})"></span><h2>${esc(tr.meta.title)}</h2></div>
+    <p class="note">${esc(tr.meta.note)}</p>
+    <canvas class="avenue" role="img" aria-label="Top view of the avenue with three intersections, their lights and queues"></canvas>
+    <div class="stats">
+      <div class="stat"><span>Mean wait</span><b data-k="wait">-</b></div>
+      <div class="stat" data-k="gapbox"><span>Distance to green wave</span><b data-k="gap">-</b></div>
+      <div class="stat"><span>Vehicles waiting</span><b data-k="queue">-</b></div>
+      <div class="stat"><span>${ev ? 'Ambulance delay' : 'Avenue green, C1 · C2 · C3'}</span><b data-k="extra">-</b></div>
+    </div>
+    <h3>Time-space diagram</h3>
+    <canvas class="ts" role="img" aria-label="Time-space diagram: green bars per intersection and vehicle groups travelling between them"></canvas>
+    <h3>Whole run</h3>
+    <canvas class="charts" role="img" aria-label="Distance to the green wave and mean wait over the whole run"></canvas>
+    <ul class="events" data-k="events"></ul>`;
+  const q = s => el.querySelector(s);
+  return {tr, el, cv: {avenue: q('.avenue'), ts: q('.ts'), charts: q('.charts')},
+    txt: {wait: q('[data-k=wait]'), gap: q('[data-k=gap]'), gapbox: q('[data-k=gapbox]'), queue: q('[data-k=queue]'), extra: q('[data-k=extra]'), events: q('[data-k=events]')}};
+}
+function updateStats(p, t) {
+  const tr = p.tr, i = Math.min(Math.floor(t), tr.meta.duration - 1), cs = tr.carrefours;
+  p.txt.wait.textContent = tr.wait[i].toFixed(1) + ' s';
+  p.txt.gap.textContent = tr.gap[i].toFixed(0) + ' s';
+  p.txt.gapbox.classList.toggle('good', tr.gap[i] <= 2);
+  p.txt.queue.textContent = cs.reduce((a, c) => a + tr.c[c].qa[i] + tr.c[c].qs[i], 0);
+  if (tr.meta.ev_delay != null) {
+    const m = tr.meta;
+    p.txt.extra.textContent = m.ev_done != null && t >= m.ev_done ? m.ev_delay + ' s' : (t >= m.ev_start ? 'on its way' : 'not yet');
+  } else p.txt.extra.textContent = cs.map(c => tr.c[c].ga[i]).join(' · ');
+  const shown = (tr.events || []).filter(e => e.t <= t).slice(-4).reverse();
+  const html = shown.map(e => `<li><span class="tm">t = ${e.t} s</span><span>${esc(e.text)}</span></li>`).join('');
+  if (p.txt.events.dataset.h !== html) { p.txt.events.innerHTML = html; p.txt.events.dataset.h = html; }
+}
+function defaultT(tr) {
+  if (tr.meta.ev_start != null) return tr.meta.ev_start - 15;
+  const ev = (tr.events || [])[0];
+  return ev ? Math.min(ev.t + 120, tr.meta.duration - 1) : 540;
+}
+function setCases(a, b, keepT) {
+  state.a = a; state.b = b && b !== a ? b : '';
+  const names = [state.a].concat(state.b ? [state.b] : []);
+  panels = names.map(n => makePanel(byName[n]));
+  const host = $('panels'); host.replaceChildren(...panels.map(p => p.el));
+  tmax = Math.min(...panels.map(p => p.tr.meta.duration)) - 1;
+  $('slider').max = tmax;
+  state.t = keepT ? Math.min(state.t, tmax) : Math.min(defaultT(byName[a]), tmax);
+  $('selA').value = state.a; $('selB').value = state.b;
+  try { history.replaceState(null, '', '#' + state.a); } catch (e) {}
+  ticks(); state.dirty = true;
+}
+function ticks() {
+  const ts = new Set(); panels.forEach(p => (p.tr.events || []).forEach(e => ts.add(e.t)));
+  $('ticks').innerHTML = [...ts].filter(x => x <= tmax).map(x => `<i style="left:${(x / tmax * 100).toFixed(2)}%"></i>`).join('');
+}
+
+/* ---------- controls ---------- */
+function build() {
+  const groups = {};
+  TRACES.forEach(t => (groups[t.meta.group] = groups[t.meta.group] || []).push(t));
+  const opts = Object.entries(groups).map(([g, ts]) => `<optgroup label="${esc(g)}">${ts.map(t => `<option value="${t.meta.name}">${esc(t.meta.title)}</option>`).join('')}</optgroup>`).join('');
+  $('selA').innerHTML = opts; $('selB').innerHTML = '<option value="">None</option>' + opts;
+  const presets = [['Selfish vs consensus', 'normal-selfish', 'normal-consensus'], ['Nash vs consensus', 'normal-nash', 'normal-consensus'],
+    ['Without vs with a failure', 'normal-consensus', 'fail-middle'], ['Ambulance: without vs with priority', 'ev-off', 'ev-on']];
+  $('presets').innerHTML = presets.filter(([, a, b]) => byName[a] && byName[b]).map(([l, a, b]) => `<button type="button" data-a="${a}" data-b="${b}">${l}</button>`).join('');
+  $('presets').onclick = e => { const b = e.target.closest('button'); if (b) setCases(b.dataset.a, b.dataset.b); };
+  $('speed').innerHTML = SPEEDS.map(s => `<button type="button" data-s="${s}" aria-pressed="${s === state.speed}">${s}×</button>`).join('');
+  $('speed').onclick = e => { const b = e.target.closest('button'); if (!b) return; state.speed = +b.dataset.s;
+    [...$('speed').children].forEach(x => x.setAttribute('aria-pressed', x === b)); };
+  $('selA').onchange = () => setCases($('selA').value, $('selB').value);
+  $('selB').onchange = () => setCases($('selA').value, $('selB').value, true);
+  $('play').onclick = () => { if (!state.playing && state.t >= tmax) state.t = 0; state.playing = !state.playing; state.last = performance.now(); $('play').textContent = state.playing ? 'Pause' : 'Play'; };
+  $('restart').onclick = () => { state.t = 0; state.dirty = true; };
+  $('slider').oninput = e => { state.t = +e.target.value; state.dirty = true; };
+  document.addEventListener('keydown', e => { if (e.code === 'Space' && !/SELECT|INPUT|BUTTON|TEXTAREA/.test(e.target.tagName)) { e.preventDefault(); $('play').click(); } });
+  if (window.ResizeObserver) new ResizeObserver(() => { state.dirty = true; }).observe($('panels'));
+  matchMedia('(prefers-color-scheme: dark)').addEventListener && matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { state.dirty = true; });
+}
+function frame(now) {
+  if (state.playing) {
+    state.t += (now - state.last) / 1000 * state.speed; state.last = now;
+    if (state.t >= tmax) { state.t = tmax; state.playing = false; $('play').textContent = 'Play'; }
+    state.dirty = true;
+  }
+  if (state.dirty || (!reduceMotion && panels.some(p => p.tr.ev))) {
+    state.dirty = false;
+    const C = colors(), t = state.t;
+    panels.forEach(p => { drawAvenue(p, t, C); drawSpace(p, t, C); drawCharts(p, t, C); updateStats(p, t); });
+    $('slider').value = t; $('clock').textContent = `t = ${Math.floor(t)} s · cycle ${Math.floor(t / 90) + 1}`;
+  }
+  requestAnimationFrame(frame);
+}
+if (TRACES.length) {
+  build();
+  const h = location.hash.slice(1);
+  setCases(byName[h] ? h : (byName[state.a] ? state.a : TRACES[0].meta.name), '');
+  requestAnimationFrame(frame);
+} else {
+  document.querySelector('.sub').textContent = 'No recorded case in this file. Run: python -m sim.replay';
+}
+</script>
